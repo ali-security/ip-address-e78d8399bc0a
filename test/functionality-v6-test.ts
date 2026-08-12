@@ -1,6 +1,7 @@
 import * as chai from 'chai';
 import { Address6 } from '../src/ipv6';
 import { v6 } from '../src/ip-address';
+import { AddressError } from '../src/address-error';
 
 const { expect } = chai;
 const should = chai.should();
@@ -709,6 +710,88 @@ describe('v6', () => {
             '<span class="zero">0</span></span>',
         );
       });
+    });
+  });
+
+  describe('an address with more than one subnet suffix', () => {
+    // RE_SUBNET_STRING anchors on the end of the address, so it strips only
+    // the trailing suffix. Anything left over is malformed and must be
+    // rejected rather than parsed as an address group, which produced a NaN
+    // group and a correctForm() of '::NaN'. Address4 already rejects the
+    // equivalent '10.0.0.1/8/16'.
+    const malformed = ['::/0/1', '::1/64/8', 'fe80::/10/64', '2001:db8::1/32/16'];
+
+    it('is rejected by isValid', () => {
+      malformed.forEach((notation) => {
+        should.equal(Address6.isValid(notation), false, notation);
+      });
+    });
+
+    it('throws from the constructor', () => {
+      malformed.forEach((notation) => {
+        should.Throw(() => new Address6(notation), AddressError, undefined, notation);
+      });
+    });
+
+    it('never leaves NaN in a parsed group', () => {
+      malformed.forEach((notation) => {
+        try {
+          const address = new Address6(notation);
+          address.parsedAddress.forEach((group) => {
+            should.equal(group.includes('NaN'), false, `${notation} -> ${group}`);
+          });
+          should.equal(address.correctForm().includes('NaN'), false, notation);
+        } catch {
+          // Throwing is the expected outcome.
+        }
+      });
+    });
+
+    it('still accepts a single suffix', () => {
+      should.equal(new Address6('::/0').subnetMask, 0);
+      should.equal(new Address6('::1/128').subnetMask, 128);
+      should.equal(new Address6('fe80::/10').subnetMask, 10);
+      should.equal(new Address6('fe80::1%eth0/64').subnetMask, 64);
+    });
+  });
+
+  describe('a v4-in-v6 address with a zero-padded octet', () => {
+    // The leading-zero rejection is checked before RE_ADDRESS runs, so the
+    // notation keeps its own error rather than falling through as an
+    // unrecognized group now that the v4 regex no longer matches it.
+    const ambiguous = [
+      '::ffff:012.0.0.1',
+      '::ffff:010.0.0.1',
+      '64:ff9b::012.0.0.1',
+      '::ffff:127.0.0.01',
+      '1111:2222:3333:4444:5555:6666:000.000.000.000',
+    ];
+
+    it('is rejected by isValid', () => {
+      ambiguous.forEach((notation) => {
+        should.equal(Address6.isValid(notation), false, notation);
+      });
+    });
+
+    it('throws from the constructor', () => {
+      ambiguous.forEach((notation) => {
+        should.Throw(() => new Address6(notation), AddressError, undefined, notation);
+      });
+    });
+
+    it('no longer lets an octal-ambiguous embedded host read as public', () => {
+      // ::ffff:012.0.0.1 reaches 10.0.0.1, so a guard must not see it as
+      // public -- and it can no longer be constructed at all.
+      should.equal(Address6.isValid('::ffff:012.0.0.1'), false);
+      should.equal(Address6.isValid('::ffff:10.0.0.1'), true);
+    });
+
+    it('still accepts unpadded embedded addresses', () => {
+      ['::ffff:10.0.0.1', '::ffff:0.0.0.0', '::ffff:192.168.0.1', '64:ff9b::0.0.0.1'].forEach(
+        (notation) => {
+          should.equal(Address6.isValid(notation), true, notation);
+        },
+      );
     });
   });
 });
