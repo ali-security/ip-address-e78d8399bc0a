@@ -222,6 +222,100 @@ describe('v6', () => {
     });
   });
 
+  describe('group() with a zone containing HTML characters', () => {
+    const payload = 'fe80::1%<b>';
+    const topic = new Address6(payload);
+
+    it('stores the raw zone on the instance', () => {
+      should.equal(topic.zone, '%<b>');
+    });
+
+    it('does not include the zone in the grouped HTML output', () => {
+      const html = topic.group();
+      html.should.not.include('<b>');
+      html.should.not.include('%');
+    });
+
+    it('does not include the zone in the non-elided grouped HTML output', () => {
+      const nonElided = new Address6('a:b:c:d:1:2:3:4%<b>');
+      const html = nonElided.group();
+      html.should.not.include('<b>');
+      html.should.not.include('%');
+    });
+
+    it('does not emit the advisory proof-of-concept payload', () => {
+      const html = new Address6('fe80::1%<img src=x onerror=alert(1)>').group();
+      html.should.not.include('<img');
+      html.should.not.include('onerror');
+    });
+  });
+
+  describe('link() with options containing HTML characters', () => {
+    const topic = new Address6('2001:db8::1');
+
+    it('escapes the className', () => {
+      const html = topic.link({ className: 'a"b' });
+      html.should.include('class="a&quot;b"');
+    });
+
+    it('escapes the prefix', () => {
+      const html = topic.link({ prefix: 'a"b' });
+      html.should.include('href="a&quot;b');
+    });
+
+    it('does not let the className break out of the attribute', () => {
+      const html = topic.link({ className: '"><script>alert(1)</script>' });
+      html.should.not.include('<script>');
+    });
+
+    it('does not let the prefix break out of the attribute', () => {
+      const html = topic.link({ prefix: '"><script>alert(1)</script>' });
+      html.should.not.include('<script>');
+    });
+
+    it('does not let the className inject an event handler', () => {
+      const html = topic.link({ className: '" onmouseover="alert(1)' });
+      html.should.not.include('" onmouseover="');
+    });
+  });
+
+  describe('parse4in6 leading-zero error', () => {
+    it('highlights the offending IPv4 octet in parseMessage', () => {
+      try {
+        // eslint-disable-next-line no-new
+        new Address6('::ffff:10.0.01.1');
+        throw new Error('expected Address6 constructor to throw');
+      } catch (e) {
+        (e as any).parseMessage.should.include('<span class="parse-error">0</span>');
+        (e as any).parseMessage.should.include('::ffff:');
+      }
+    });
+
+    it('escapes HTML characters in the prefix', () => {
+      try {
+        // eslint-disable-next-line no-new
+        new Address6('<b>:10.0.01.1');
+        throw new Error('expected Address6 constructor to throw');
+      } catch (e) {
+        const parseMessage = (e as any).parseMessage;
+        parseMessage.should.not.include('<b>');
+        parseMessage.should.include('&lt;b&gt;');
+      }
+    });
+
+    it('escapes the advisory proof-of-concept payload in the prefix', () => {
+      try {
+        // eslint-disable-next-line no-new
+        new Address6('<img src=x onerror=alert(1)>:10.0.01.1');
+        throw new Error('expected Address6 constructor to throw');
+      } catch (e) {
+        const parseMessage = (e as any).parseMessage;
+        parseMessage.should.not.include('<img');
+        parseMessage.should.include('&lt;img src=x onerror=alert(1)&gt;');
+      }
+    });
+  });
+
   describe('A teredo address', () => {
     const topic = new Address6('2001:0000:ce49:7601:e866:efff:62c3:fffe');
 
@@ -410,6 +504,44 @@ describe('v6', () => {
       expect(obj.error).to.equal('failed to parse address with port');
       expect(obj.port).to.equal(null);
     });
+
+    it('should reject trailing junk in a bracketed URL (#158)', () => {
+      const obj = Address6.fromURL('http://[1234:5678::abcdxyz]');
+
+      expect(obj.error).to.equal('failed to parse address from URL');
+      expect(obj.address).to.equal(null);
+      expect(obj.port).to.equal(null);
+    });
+
+    it('should reject trailing junk in an unbracketed URL (#158)', () => {
+      const obj = Address6.fromURL('http://1234:5678::abcdxyz');
+
+      expect(obj.error).to.equal('failed to parse address from URL');
+      expect(obj.address).to.equal(null);
+      expect(obj.port).to.equal(null);
+    });
+
+    it('should reject trailing junk in a bracketed URL with a port', () => {
+      const obj = Address6.fromURL('http://[1234:5678::abcdxyz]:80');
+
+      expect(obj.error).to.equal('failed to parse address with port');
+      expect(obj.address).to.equal(null);
+      expect(obj.port).to.equal(null);
+    });
+
+    it('should accept v4-in-v6 addresses in URLs', () => {
+      const obj = Address6.fromURL('http://[::ffff:192.168.1.1]/foo');
+
+      expect(obj.address?.address).to.equal('::ffff:192.168.1.1');
+      expect(obj.port).to.equal(null);
+    });
+
+    it('should accept v4-in-v6 addresses in URLs with a port', () => {
+      const obj = Address6.fromURL('http://[::ffff:192.168.1.1]:8080/foo');
+
+      expect(obj.address?.address).to.equal('::ffff:192.168.1.1');
+      expect(obj.port).to.equal(8080);
+    });
   });
 
   describe('An address from a BigInt', () => {
@@ -515,6 +647,12 @@ describe('v6', () => {
               '<span class="hover-group group-v4 group-6">192.168</span>.<span class="hover-group group-v4 group-7">0.1</span>',
           );
       });
+
+      it('should HTML-escape non-pass-through segments', () => {
+        const topic = v6.helpers.simpleGroup('<b>bold</b>');
+
+        topic[0].should.equal('<span class="hover-group group-0">&lt;b&gt;bold&lt;/b&gt;</span>');
+      });
     });
   });
 
@@ -532,6 +670,12 @@ describe('v6', () => {
     });
 
     describe('spanAll', () => {
+      it('should HTML-escape characters in the class attribute', () => {
+        const topic = v6.helpers.spanAll('"');
+
+        topic.should.equal('<span class="digit value-&quot; position-0">&quot;</span>');
+      });
+
       it('should span leading zeroes', () => {
         const topic = v6.helpers.spanAll('001100');
 

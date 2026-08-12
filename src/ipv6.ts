@@ -198,11 +198,14 @@ export class Address6 {
   static fromURL(url: string) {
     let host: string;
     let port: string | number | null = null;
-    let result: string[] | null;
+    let result: RegExpExecArray | null;
+
+    // Remove the protocol prefix, if any
+    const stripped = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
 
     // If we have brackets parse them and find a port
-    if (url.indexOf('[') !== -1 && url.indexOf(']:') !== -1) {
-      result = constants6.RE_URL_WITH_PORT.exec(url);
+    if (stripped.indexOf('[') !== -1 && stripped.indexOf(']:') !== -1) {
+      result = constants6.RE_URL_WITH_PORT.exec(stripped);
 
       if (result === null) {
         return {
@@ -214,13 +217,8 @@ export class Address6 {
 
       host = result[1];
       port = result[2];
-      // If there's a URL extract the address
-    } else if (url.indexOf('/') !== -1) {
-      // Remove the protocol prefix
-      url = url.replace(/^[a-z0-9]+:\/\//, '');
-
-      // Parse the address
-      result = constants6.RE_URL.exec(url);
+    } else {
+      result = constants6.RE_URL.exec(stripped);
 
       if (result === null) {
         return {
@@ -230,10 +228,8 @@ export class Address6 {
         };
       }
 
-      host = result[1];
-      // Otherwise just assign the URL to the host and let the library parse it
-    } else {
-      host = url;
+      // Exactly one of the two alternatives matches, and neither can be empty
+      host = result[1] || result[2];
     }
 
     // If there's a port convert it to an integer
@@ -617,12 +613,15 @@ export class Address6 {
 
       for (let i = 0; i < this.address4.groups; i++) {
         if (/^0[0-9]+/.test(this.address4.parsedAddress[i])) {
+          // The prefix groups haven't been through the bad-character check
+          // yet, so escape them before including in the error HTML.
+          const highlighted = this.address4.parsedAddress.map(spanLeadingZeroes4).join('.');
+          const prefix = groups.slice(0, -1).map(helpers.escapeHtml).join(':');
+          const separator = groups.length > 1 ? ':' : '';
+
           throw new AddressError(
             "IPv4 addresses can't have leading zeroes.",
-            address.replace(
-              constants4.RE_ADDRESS,
-              this.address4.parsedAddress.map(spanLeadingZeroes4).join('.'),
-            ),
+            `${prefix}${separator}${highlighted}`,
           );
         }
       }
@@ -1083,12 +1082,16 @@ export class Address6 {
     }
 
     const form = formFunction.call(this);
+    const safeHref = helpers.escapeHtml(`${options.prefix}${form}`);
+    const safeForm = helpers.escapeHtml(form);
 
     if (options.className) {
-      return `<a href="${options.prefix}${form}" class="${options.className}">${form}</a>`;
+      const safeClass = helpers.escapeHtml(options.className);
+
+      return `<a href="${safeHref}" class="${safeClass}">${safeForm}</a>`;
     }
 
-    return `<a href="${options.prefix}${form}">${form}</a>`;
+    return `<a href="${safeHref}">${safeForm}</a>`;
   }
 
   /**
@@ -1098,7 +1101,7 @@ export class Address6 {
   group(): string {
     if (this.elidedGroups === 0) {
       // The simple case
-      return helpers.simpleGroup(this.address).join(':');
+      return helpers.simpleGroup(this.addressMinusSuffix).join(':');
     }
 
     assert(typeof this.elidedGroups === 'number');
@@ -1107,7 +1110,7 @@ export class Address6 {
     // The elided case
     const output = [];
 
-    const [left, right] = this.address.split('::');
+    const [left, right] = this.addressMinusSuffix.split('::');
 
     if (left.length) {
       output.push(...helpers.simpleGroup(left));
